@@ -25,7 +25,7 @@ Cloud dictation apps send every word you say to someone else's server: your emai
 ## Quick Start
 
 ```bash
-git clone https://github.com/Data-Wizards-Solutions/linux-whisper.git ~/dev/linux-whisper
+git clone https://github.com/Mettedws/linux-whisper.git ~/dev/linux-whisper
 cd ~/dev/linux-whisper
 ./install.sh    # Installs deps, sets up permissions
 # Log out and back in (required for input group)
