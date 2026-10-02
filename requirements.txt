@@ -1,2 +1,3 @@
-RealtimeSTT>=0.3.0
-evdev>=1.6.0
+RealtimeSTT==0.3.104  # 1.x dropped the faster-whisper dependency
+evdev>=1.6.0,<2  # 1.9.3 is what this is tested with
+requests  # imported by faster-whisper but not declared

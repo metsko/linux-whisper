@@ -36,13 +36,13 @@ cd ~/dev/linux-whisper
 
 ### System Dependencies
 
-`install.sh` currently supports **Ubuntu/Debian** (it uses `apt`). On other distros, install the equivalent packages yourself, then follow the permission steps below and run `pip install -r requirements.txt` in a venv.
+`install.sh` currently supports **Ubuntu/Debian** (it uses `apt`). On other distros, install the equivalent packages yourself, then follow the permission steps below and run `pip install -r requirements.lock` in a venv.
 
-The Python install pulls in PyTorch, roughly 2–3 GB of downloads. An NVIDIA GPU is optional; CPU works fine with `base.en` or `small.en`.
+The Python install pulls in PyTorch with CUDA libraries, about 5 GB on disk. An NVIDIA GPU is optional; CPU works fine with `base.en` or `small.en`.
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install python3-pip python3-venv portaudio19-dev ffmpeg ydotool wl-clipboard
+sudo apt install build-essential python3-dev python3-pip python3-venv portaudio19-dev ffmpeg ydotool wl-clipboard
 ```
 
 ### Permissions (handled by install.sh)

@@ -45,6 +45,15 @@ if ! dpkg -l | grep -q portaudio19-dev 2>/dev/null; then
     MISSING_PKGS+=(portaudio19-dev)
 fi
 
+# Compiler + Python headers: PyAudio and evdev build from source
+if ! command -v gcc &> /dev/null; then
+    MISSING_PKGS+=(build-essential)
+fi
+
+if ! python3 -c "import sysconfig, os, sys; sys.exit(not os.path.exists(os.path.join(sysconfig.get_paths()['include'], 'Python.h')))"; then
+    MISSING_PKGS+=(python3-dev)
+fi
+
 if ! python3 -c "import ensurepip" &> /dev/null; then
     MISSING_PKGS+=(python3-venv)
 fi
@@ -80,8 +89,8 @@ UINPUT_RULE="/etc/udev/rules.d/99-uinput.rules"
 if [ ! -f "$UINPUT_RULE" ]; then
     echo "[SETUP] Creating udev rule for /dev/uinput..."
     echo 'KERNEL=="uinput", MODE="0660", GROUP="input"' | sudo tee "$UINPUT_RULE" > /dev/null
-    sudo udevadm control --reload-rules
-    sudo udevadm trigger
+    sudo udevadm control --reload-rules && sudo udevadm trigger \
+        || echo "[WARN] Could not reload udev rules; they apply after reboot"
     echo "[OK] udev rule created"
 else
     echo "[OK] udev rule already exists"
@@ -90,7 +99,7 @@ fi
 # Ensure uinput module is loaded
 if ! lsmod | grep -q uinput; then
     echo "[SETUP] Loading uinput kernel module..."
-    sudo modprobe uinput
+    sudo modprobe uinput || echo "[WARN] Could not load uinput module; it loads on next boot"
 fi
 
 # Ensure uinput loads on boot
@@ -129,7 +138,7 @@ EOF
         echo "[OK] ydotoold service already exists"
     fi
 
-    systemctl --user daemon-reload
+    systemctl --user daemon-reload || true
 
     if systemctl --user enable ydotoold.service 2>/dev/null; then
         echo "[OK] ydotoold service enabled"
@@ -149,7 +158,7 @@ else
         systemctl --user stop ydotoold.service 2>/dev/null || true
         systemctl --user disable ydotoold.service 2>/dev/null || true
         rm -f "$YDOTOOL_SERVICE"
-        systemctl --user daemon-reload
+        systemctl --user daemon-reload || true
         echo "[OK] Removed stale ydotoold service"
     fi
 fi
@@ -162,7 +171,7 @@ python3 -m venv venv
 echo "[SETUP] Installing Python dependencies..."
 source venv/bin/activate
 pip install --upgrade pip -q
-pip install -r requirements.txt
+pip install -r requirements.lock
 
 # ---- GNOME autostart: import display env into systemd user session ----
 echo ""
@@ -220,7 +229,7 @@ WantedBy=default.target
 EOF
 echo "[OK] Created whisper-dictate user service"
 
-systemctl --user daemon-reload
+systemctl --user daemon-reload || true
 
 if systemctl --user enable whisper-dictate.service 2>/dev/null; then
     echo "[OK] whisper-dictate service enabled"
