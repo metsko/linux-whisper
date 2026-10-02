@@ -786,4 +786,11 @@ def main():
         print("\n[EXIT] Goodbye!")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        # RealtimeSTT spawns non-daemon threads/processes; if main() dies they keep
+        # the process alive and systemd never restarts it. Hard-exit so Restart= works.
+        import traceback
+        traceback.print_exc()
+        os._exit(1)
