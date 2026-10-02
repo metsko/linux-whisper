@@ -36,7 +36,9 @@ cd ~/dev/linux-whisper
 
 ### System Dependencies
 
-The install script handles these automatically, but for reference:
+`install.sh` currently supports **Ubuntu/Debian** (it uses `apt`). On other distros, install the equivalent packages yourself, then follow the permission steps below and run `pip install -r requirements.txt` in a venv.
+
+The Python install pulls in PyTorch, roughly 2–3 GB of downloads. An NVIDIA GPU is optional; CPU works fine with `base.en` or `small.en`.
 
 **Ubuntu/Debian:**
 ```bash

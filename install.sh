@@ -45,6 +45,10 @@ if ! dpkg -l | grep -q portaudio19-dev 2>/dev/null; then
     MISSING_PKGS+=(portaudio19-dev)
 fi
 
+if ! python3 -c "import ensurepip" &> /dev/null; then
+    MISSING_PKGS+=(python3-venv)
+fi
+
 if ! command -v ffmpeg &> /dev/null; then
     MISSING_PKGS+=(ffmpeg)
 fi
