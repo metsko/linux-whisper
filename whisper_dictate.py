@@ -117,7 +117,9 @@ def type_text(text, method=None, window_id=None):
             subprocess.run(["wl-copy", "--", text], check=True, timeout=5)
             subprocess.run(["xclip", "-selection", "clipboard"],
                            input=text.encode(), check=True, timeout=5, env=env)
-            subprocess.run(["ydotool", "key", "--delay", "50", "ctrl+v"],
+            # ydotool >= 1.0 takes raw evdev keycodes: 29 = LEFTCTRL, 47 = V
+            subprocess.run(["ydotool", "key", "--key-delay", "50",
+                            "29:1", "47:1", "47:0", "29:0"],
                            check=True, timeout=5)
         elif method == "wtype":
             subprocess.run(
@@ -747,10 +749,6 @@ def main():
     save_default_config()
     _set_xwayland_keyboard_layout()
 
-    # Start audio health monitor early (before model load)
-    audio_monitor = AudioHealthMonitor()
-    audio_monitor.start()
-
     # Check for input method
     configured = config.get("input_method", "auto")
     method = detect_input_method() if configured == "auto" else configured
@@ -768,6 +766,13 @@ def main():
         print(f"[INIT] Using input method: {method}")
 
     dictation = WhisperDictation()
+
+    # Start the audio health monitor only after the recorder is up: it opens
+    # PyAudio periodically, and if that overlaps RealtimeSTT forking its audio
+    # worker, the child inherits a live PortAudio and fails with
+    # "PortAudio can not be initialized recursively" (silent, empty recordings).
+    audio_monitor = AudioHealthMonitor()
+    audio_monitor.start()
 
     print(f"\n{'='*50}")
     print(f"  Linux Whisper Dictation")
