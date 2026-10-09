@@ -343,6 +343,7 @@ class WhisperDictation:
         self.is_recording = False
         self.is_processing = False
         self.lock = threading.Lock()
+        self._last_typed_window = object()  # sentinel: nothing typed yet (window id may be None)
         self._processing_deadline = 0  # auto-reset safety net
         self._target_window: str | None = None
 
@@ -409,7 +410,13 @@ class WhisperDictation:
         """Type transcribed text at cursor."""
         if text and text.strip():
             print(f"[TEXT] {text}")
-            type_text(text + " ", window_id=self._target_window)
+            # Leading, not trailing, separator: rich-text editors (e.g. browser
+            # chat boxes) trim trailing whitespace on paste, gluing phrases together.
+            # ponytail: "same window" = previous text is adjacent; wrong if the user
+            # moved the cursor or submitted in between (costs one stray leading space).
+            sep = " " if self._last_typed_window == self._target_window else ""
+            if type_text(sep + text, window_id=self._target_window):
+                self._last_typed_window = self._target_window
 
     def _is_stuck(self):
         """Check if processing has been stuck too long (safety net)."""

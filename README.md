@@ -4,6 +4,8 @@ A local voice-to-text tool for Linux. Press a hotkey, speak, and it types what y
 
 Works on both X11 and Wayland (including GNOME).
 
+![Dictating English then Dutch into a browser chat box](demo-browser.gif)
+
 ## Why local?
 
 Cloud dictation apps send every word you say to someone else's server: your emails, passwords spoken by mistake, medical notes, client details. This tool doesn't.
@@ -75,6 +77,8 @@ First run downloads the Whisper model (~150MB for base.en).
 - **Hold Ctrl+Space** (default) and speak. Each phrase is transcribed and typed as soon as you pause.
 - **Release** to stop. A tap shorter than 1 second is discarded, so accidental presses don't type anything.
 
+![Dictating a prompt into Claude Code in the terminal](demo.gif)
+
 ## Configuration
 
 `config.json` is created with defaults on first run. Edit it to override:
@@ -93,7 +97,7 @@ First run downloads the Whisper model (~150MB for base.en).
 ```
 
 - `device`: `cuda` uses an NVIDIA GPU and falls back to CPU automatically.
-- `language`: set to `""` with a multilingual model (e.g. `medium`, `large-v3`) to auto-detect.
+- `language`: set to `""` with a multilingual model (e.g. `medium`, `large-v3`) to auto-detect. Detection runs per phrase, so pause about 1.5s before switching language mid-dictation; otherwise the second language may be dropped.
 - `keyboard_layout`: optional `setxkbmap` layout (e.g. `be`, `de`) forced at startup, for non-QWERTY users typing via `xdotool`.
 
 ### Model Options
