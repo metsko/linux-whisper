@@ -287,6 +287,110 @@ def notify(summary, body="", urgency="normal"):
     except FileNotFoundError:
         print(f"[NOTIFY] {summary}" + (f" - {body}" if body else ""))
 
+class LiveTyper:
+    """Types a phrase into the target window while it's still being spoken.
+
+    Append-only: a word is pasted once two consecutive live transcripts agree on
+    it and it isn't the trailing (still-changing) word. Never backspaces: the
+    held Ctrl hotkey would turn Backspace into Ctrl+Backspace (delete word).
+    """
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self._lock = threading.Lock()
+        self._env = None
+        self._window = None
+        self._saved_clipboard = None
+        self._live = False
+        self._phrase_open = False
+        self._prev = []
+        self._committed = []
+        self._sep = ""
+
+    @staticmethod
+    def _same(a, b):
+        # Live passes flip punctuation and case constantly ("Hey." / "Hey,").
+        strip = ".,!?;:…\"'"
+        return a.strip(strip).lower() == b.strip(strip).lower()
+
+    @classmethod
+    def new_words(cls, prev, cur, committed):
+        """Words of `cur` that are newly stable, given words already typed."""
+        n = len(committed)
+        if len(cur) < n or not all(map(cls._same, cur, committed)):
+            return []
+        stable = 0
+        for a, b in zip(prev, cur[:-1]):
+            if not cls._same(a, b):
+                break
+            stable += 1
+        return cur[n:stable]
+
+    def start_session(self, window_id):
+        with self._lock:
+            self._env = _build_display_env()
+            self._window = window_id
+            self._saved_clipboard = _save_clipboard(self._env)
+            self._live = bool(window_id)
+
+    def start_phrase(self, sep):
+        with self._lock:
+            self._phrase_open = True
+            self._prev, self._committed, self._sep = [], [], sep
+
+    def update(self, text):
+        # Skip rather than queue: the next update carries everything this one had.
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            if self._live and self._phrase_open:
+                cur = text.split()
+                new = self.new_words(self._prev, cur, self._committed)
+                self._prev = cur
+                if new:
+                    self._paste(new)
+        finally:
+            self._lock.release()
+
+    def finish_phrase(self, text):
+        """Paste what's left of the final transcript. Returns True if anything was typed."""
+        with self._lock:
+            self._phrase_open = False
+            words = text.split()
+            if not self._live:
+                if words:  # focus left mid-phrase: hand the text over via clipboard
+                    _set_clipboard("UTF8_STRING", (self._sep + text).encode(), self._env)
+                return False
+            # ponytail: words typed live stay even if the final transcript changed
+            # them (no backspace while Ctrl is held); usually only punctuation differs.
+            rest = words[len(self._committed):]
+            if rest:
+                self._paste(rest)
+            return bool(self._committed)
+
+    def end_session(self):
+        with self._lock:
+            if self._saved_clipboard and self._live and _active_window(self._env) == self._window:
+                time.sleep(0.3)  # target app reads the clipboard async after Ctrl+V
+                _restore_clipboard(self._saved_clipboard, self._env)
+            self._live = False
+
+    def _paste(self, words):
+        if _active_window(self._env) != self._window:
+            print("[INFO] Focus moved, live typing stopped for this recording.")
+            self._live = False
+            return
+        text = (" " if self._committed else self._sep) + " ".join(words)
+        try:
+            _set_clipboard("UTF8_STRING", text.encode(), self._env)
+            # ydotool >= 1.0 takes raw evdev keycodes: 29 = LEFTCTRL, 47 = V
+            subprocess.run(["ydotool", "key", "--key-delay", "50",
+                            "29:1", "47:1", "47:0", "29:0"], check=True, timeout=5)
+            self._committed += words
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            print(f"[WARN] Live paste failed: {e}")
+            self._live = False
+
 # ============ Audio Health Monitor ============
 
 class AudioHealthMonitor:
@@ -384,7 +488,10 @@ class WhisperDictation:
         self.is_recording = False
         self.is_processing = False
         self.lock = threading.Lock()
+        method = config.get("input_method", "auto")
+        self._typer = LiveTyper(enabled=(detect_input_method() if method == "auto" else method) == "ydotool")
         self._last_typed_window = object()  # sentinel: nothing typed yet (window id may be None)
+        self._sep = ""
         self._processing_deadline = 0  # auto-reset safety net
         self._target_window: str | None = None
 
@@ -423,6 +530,7 @@ class WhisperDictation:
             min_length_of_recording=0.5,
             min_gap_between_recordings=0,
             enable_realtime_transcription=True,
+            use_main_model_for_realtime=True,
             realtime_processing_pause=0.1,
             on_realtime_transcription_update=self._on_realtime_update,
             on_recording_start=self._on_recording_start,
@@ -441,26 +549,32 @@ class WhisperDictation:
         self._watchdog.start()
 
     def _on_realtime_update(self, text):
+        self._typer.update(text)
         if sys.stdout.isatty():
             print(f"\r[LIVE] {text}          ", end="", flush=True)
 
     def _on_recording_start(self):
         print("[REC] Recording...")
+        # Leading, not trailing, separator: rich-text editors (e.g. browser
+        # chat boxes) trim trailing whitespace on paste, gluing phrases together.
+        # ponytail: "same window" = previous text is adjacent; wrong if the user
+        # moved the cursor or submitted in between (costs one stray leading space).
+        self._sep = " " if self._last_typed_window == self._target_window else ""
+        self._typer.start_phrase(self._sep)
 
     def _on_recording_stop(self):
         print("\n[REC] Processing...")
 
     def _process_text(self, text):
-        """Type transcribed text at cursor."""
-        if text and text.strip():
+        """Type transcribed text at cursor (or finish what live typing started)."""
+        text = text or ""
+        if text.strip():
             print(f"[TEXT] {text}")
-            # Leading, not trailing, separator: rich-text editors (e.g. browser
-            # chat boxes) trim trailing whitespace on paste, gluing phrases together.
-            # ponytail: "same window" = previous text is adjacent; wrong if the user
-            # moved the cursor or submitted in between (costs one stray leading space).
-            sep = " " if self._last_typed_window == self._target_window else ""
-            if type_text(sep + text, window_id=self._target_window):
+        if self._typer.enabled:
+            if self._typer.finish_phrase(text):
                 self._last_typed_window = self._target_window
+        elif text.strip() and type_text(self._sep + text, window_id=self._target_window):
+            self._last_typed_window = self._target_window
 
     def _is_stuck(self):
         """Check if processing has been stuck too long (safety net)."""
@@ -530,6 +644,8 @@ class WhisperDictation:
         except Exception:
             self._target_window = None
 
+        if self._typer.enabled:
+            self._typer.start_session(self._target_window)
         play_sound("start")
 
         def record():
@@ -552,6 +668,7 @@ class WhisperDictation:
                     self.is_processing = False
                     self._processing_deadline = 0
                     self.recorder.set_microphone(False)
+                self._typer.end_session()
                 play_sound("stop")
 
         threading.Thread(target=record, daemon=True).start()
@@ -680,6 +797,10 @@ def find_keyboard_devices(evdev, ecodes):
                 keys = caps[ecodes.EV_KEY]
                 # Accept devices with letter keys (standard keyboards)
                 # or devices with the specific hotkey trigger key
+                # Skip ydotool's virtual keyboard: its synthetic Ctrl (paste)
+                # would read as hotkey presses/releases and end the session.
+                if "ydotool" in dev.name.lower():
+                    continue
                 if ecodes.KEY_A in keys and ecodes.KEY_Z in keys:
                     devices.append(dev)
         except PermissionError:

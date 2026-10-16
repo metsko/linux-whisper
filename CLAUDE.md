@@ -39,8 +39,8 @@ This handles: system packages (ydotool, portaudio, ffmpeg), `input` group member
 ### Key Design Decisions
 
 - **evdev for hotkeys**: Only method that detects key-release on Wayland (needed for push-to-talk). Requires `input` group.
-- **ydotool for typing**: Only text injection method that works on GNOME Wayland. Falls back to wl-copy/xclip + paste.
-- **Hold-to-record + VAD**: Holding the hotkey keeps recording across multiple VAD-detected phrases — each phrase is transcribed and typed as it completes (1.2s post-speech silence). Releasing the key stops recording.
+- **ydotool for typing**: Pastes via xclip + ydotool Ctrl+V (never wl-copy/wl-paste: on GNOME they open a focus-stealing window). With ydotool, `LiveTyper` streams words into the app while the hotkey is held, append-only (held Ctrl turns Backspace into Ctrl+Backspace). The ydotool virtual keyboard is excluded from hotkey listening.
+- **Hold-to-record + VAD**: Holding the hotkey keeps recording across multiple VAD-detected phrases — each phrase is typed live as it's spoken and completed by the final large-v3 pass at a 0.7s pause. Releasing the key stops recording.
 - **Thread safety**: `threading.Lock` prevents concurrent recording; separate `is_recording`/`is_processing` states with 120s safety timeout.
 
 ### Code Structure in whisper_dictate.py
