@@ -112,15 +112,19 @@ def type_text(text, method=None, window_id=None):
         elif method == "ydotool":
             # ydotool type sends raw evdev keycodes (QWERTY-based), so it produces
             # wrong characters on non-QWERTY layouts. Use clipboard paste instead.
-            # Set both Wayland and X11 clipboards: native Wayland apps read wl-copy,
-            # XWayland apps (e.g. VSCode/Electron) read xclip.
-            subprocess.run(["wl-copy", "--", text], check=True, timeout=5)
-            subprocess.run(["xclip", "-selection", "clipboard"],
-                           input=text.encode(), check=True, timeout=5, env=env)
+            # xclip only: Mutter bridges the X11 clipboard to Wayland apps, whereas
+            # wl-copy/wl-paste on GNOME open a transient window that steals focus.
+            saved_clipboard = _save_clipboard(env)
+            _set_clipboard("UTF8_STRING", text.encode(), env)
             # ydotool >= 1.0 takes raw evdev keycodes: 29 = LEFTCTRL, 47 = V
             subprocess.run(["ydotool", "key", "--key-delay", "50",
                             "29:1", "47:1", "47:0", "29:0"],
                            check=True, timeout=5)
+            # Focus unchanged = text landed where intended, so give the user their
+            # clipboard back. Focus moved = paste likely missed; keep the text copied.
+            if saved_clipboard and window_id and _active_window(env) == window_id:
+                time.sleep(0.3)  # target app reads the clipboard async after Ctrl+V
+                _restore_clipboard(saved_clipboard, env)
         elif method == "wtype":
             subprocess.run(
                 ["wtype", "--", text],
@@ -133,6 +137,43 @@ def type_text(text, method=None, window_id=None):
         # Fall back to clipboard paste
         print("[INFO] Trying clipboard fallback...")
         return _type_via_clipboard(text)
+
+def _active_window(env):
+    # ponytail: xdotool only sees XWayland windows on Wayland; native Wayland apps
+    # report whatever XWayland window was last focused, so a switch between two
+    # native apps isn't detected.
+    try:
+        return subprocess.run(["xdotool", "getactivewindow"], capture_output=True,
+                              text=True, timeout=2, env=env).stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _set_clipboard(target, data, env):
+    # xclip forks to own the selection; don't capture its stdout or run() blocks.
+    subprocess.run(["xclip", "-selection", "clipboard", "-t", target], input=data,
+                   stdout=subprocess.DEVNULL, check=True, timeout=5, env=env)
+
+
+def _save_clipboard(env):
+    """Return (target, bytes) of the current clipboard, or None if empty."""
+    def get(target):
+        return subprocess.run(["xclip", "-selection", "clipboard", "-o", "-t", target],
+                              capture_output=True, timeout=2, check=True, env=env).stdout
+    try:
+        targets = get("TARGETS").decode().split()
+        target = next((t for t in targets if t == "UTF8_STRING" or "/" in t), None)
+        return (target, get(target)) if target else None
+    except Exception:
+        return None
+
+
+def _restore_clipboard(saved, env):
+    try:
+        _set_clipboard(*saved, env)
+    except Exception as e:
+        print(f"[WARN] Could not restore clipboard: {e}")
+
 
 def _find_xauthority():
     """Find the Mutter/XWayland auth file for the current user session."""
@@ -185,10 +226,10 @@ def _type_via_clipboard(text):
     try:
         env = _build_display_env()
         if session_type == "wayland":
-            subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--delay", "0", "--", text],
-                check=True, timeout=30, env=env
-            )
+            # Synthetic X input (xdotool) triggers GNOME's remote-desktop prompt,
+            # so just leave the text on the clipboard for a manual paste.
+            _set_clipboard("UTF8_STRING", text.encode(), env)
+            notify("Dictation copied", "Paste failed; text is on the clipboard.")
         else:
             subprocess.run(
                 ["xclip", "-selection", "clipboard"],
@@ -374,8 +415,11 @@ class WhisperDictation:
             sample_rate=16000,
             silero_sensitivity=0.4,
             webrtc_sensitivity=2,
-            post_speech_silence_duration=1.2,
-            pre_recording_buffer_duration=0.5,
+            post_speech_silence_duration=0.7,
+            # VAD needs a few hundred ms to confirm speech; this buffer is what
+            # keeps the first word. Mic is muted before the press, so it can't
+            # reach back past the hotkey.
+            pre_recording_buffer_duration=1.5,
             min_length_of_recording=0.5,
             min_gap_between_recordings=0,
             enable_realtime_transcription=True,
@@ -473,6 +517,7 @@ class WhisperDictation:
             self.is_recording = True
             self.is_processing = True
             self._processing_deadline = time.time() + RECORDING_TIMEOUT
+            self.recorder.clear_audio_queue()  # drop the last session's tail
             self.recorder.set_microphone(True)
 
         try:
@@ -526,7 +571,15 @@ class WhisperDictation:
         # everything said afterwards would accumulate into a session only the
         # watchdog can end. Interrupt instead; an idle recorder holds no audio.
         if self.recorder.is_recording:
-            self.recorder.stop()
+            # stop() silently no-ops within min_length_of_recording of VAD start;
+            # with the mic muted the VAD never ends it either, so text() hangs
+            # until the watchdog. Defer the stop until it will be honoured.
+            too_soon = (self.recorder.min_length_of_recording + 0.05
+                        - (time.time() - self.recorder.recording_start_time))
+            if too_soon > 0:
+                threading.Timer(too_soon, self.recorder.stop).start()
+            else:
+                self.recorder.stop()
         else:
             self._abort_recorder()
 
